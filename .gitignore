@@ -5,3 +5,6 @@ uesave*
 *.ini
 *.sav
 *.json
+
+!DefaultPalworldSettings.ini
+!conf.example.json

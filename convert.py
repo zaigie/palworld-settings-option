@@ -1,10 +1,30 @@
 from enum import Enum
 from typing import Dict
+import os
 import sys
 import re
-
+import json
+import subprocess
+import platform
+import zlib
 
 DEATHPENALTY_VALUES = ["None", "Item", "ItemAndEquipment", "All"]
+
+
+def get_uesave_path() -> None:
+    current_dir = os.path.dirname(
+        os.path.realpath(sys.executable if getattr(sys, "frozen", False) else __file__)
+    )
+    executable = "uesave"
+    if platform.system() == "Windows":
+        executable += ".exe"
+    uesave_path = os.path.join(current_dir, executable)
+    if not os.path.isfile(uesave_path):
+        raise FileNotFoundError(f"uesave does not exist at {uesave_path}")
+    return uesave_path
+
+
+UESAVE_PATH = os.environ.get("UESAVE_PATH", get_uesave_path())
 
 
 class StructTypes(Enum):
@@ -21,34 +41,34 @@ class ConfigOption:
         self.struct = struct
         self.default_value = default_value
 
-    def _typecast(self, value):
+    def typecast(self, value):
         if self.struct == StructTypes.Int:
-            # work around if the values are a float
             return int(float(value))
         elif self.struct == StructTypes.Float:
             return float(value)
         elif self.struct == StructTypes.Bool:
-            if value.lower() in ["false", "0"]:
-                return False
-            else:
-                return True
+            return value.lower() not in ["false", "0"]
         elif self.struct == StructTypes.Enum:
-            if len(value) == 1:
-                # Going to assume its an int
-                index_value = int(value)
-                if index_value >= len(DEATHPENALTY_VALUES):
-                    raise AttributeError(
-                        f"{value} is not a valid option for DeathPenalty"
-                    )
-                else:
-                    return DEATHPENALTY_VALUES[index_value]
-            else:
-                return value
+            return self._handle_enum(value)
         else:
             return value
 
+    def _handle_enum(self, value):
+        if value.isdigit():
+            index_value = int(value)
+            if 0 <= index_value < len(DEATHPENALTY_VALUES):
+                return DEATHPENALTY_VALUES[index_value]
+            else:
+                raise ValueError(f"{value} is out of bounds for DeathPenalty enum.")
+        elif value.lower() in (val.lower() for val in DEATHPENALTY_VALUES):
+            return next(
+                val for val in DEATHPENALTY_VALUES if val.lower() == value.lower()
+            )
+        else:
+            raise ValueError(f"{value} is not a valid option for DeathPenalty")
+
     def is_default(self, value) -> bool:
-        return self.default_value == self._typecast(value)
+        return self.default_value == self.typecast(value)
 
     def json_struct(self, value) -> Dict:
         if self.struct == StructTypes.Enum:
@@ -77,7 +97,7 @@ class ConfigOption:
                 }
             }
         else:
-            return {self.struct.name: {"value": self._typecast(value)}}
+            return {self.struct.name: {"value": self.typecast(value)}}
 
 
 class SettingStructs:
@@ -204,8 +224,8 @@ class SettingStructs:
         return getattr(SettingStructs, option_name)
 
 
-def generate_json_config(config: str) -> Dict:
-    json_config = {}
+def gen_json(config: str, is_sav: bool = False) -> Dict:
+    conf = {}
     tokens = re.findall(r'(\w.*?)=([^"].*?|".*?")((?=,)|$)', config)
     for key, value, _ in tokens:
         try:
@@ -216,66 +236,40 @@ def generate_json_config(config: str) -> Dict:
                 # if it was already escaped in the config
                 value = value.replace('\\"', '"')
             config_properties = SettingStructs.get_config_option(key)
-            if not config_properties.is_default(value):
-                json_config[key] = config_properties.json_struct(value)
+            if is_sav:
+                if not config_properties.is_default(value):
+                    conf[key] = config_properties.json_struct(value)
+            else:
+                conf[key] = config_properties.typecast(value)
         except AttributeError:
             print("Error loading", key)
         except ValueError:
             print(f"Error parsing {key}:{value}")
             print("Something looks malformed in your config")
             print("Open a bug report with your config if issues persists")
-    return json_config
-
-
-def generate_json_properties(config: str) -> Dict:
-    json_properties = {}
-    tokens = re.findall(r'(\w.*?)=([^"].*?|".*?")((?=,)|$)', config)
-    for key, value, _ in tokens:
-        try:
-            if key == "Difficulty":
-                continue
-            if '"' in value:
-                value = re.match(r'^"(.*)"$', value.strip()).group(1)
-                # if it was already escaped in the config
-                value = value.replace('\\"', '"')
-            config_properties = SettingStructs.get_config_option(key)
-            json_properties[key] = config_properties._typecast(value)
-        except AttributeError:
-            print("Error loading", key)
-        except ValueError:
-            print(f"Error parsing {key}:{value}")
-            print("Something looks malformed in your config")
-            print("Open a bug report with your config if issues persists")
-    return json_properties
+    return conf
 
 
 def parse_config(config: str) -> str:
     return config.replace("OptionSettings=(", "").strip().strip(")")
 
 
-def load_palworldsettings(path: str) -> str:
-    with open(path, encoding="utf8") as f:
-        config = None
-        for line in f:
-            if "OptionSettings" in line:
-                config = line
-        if config is None:
-            print("Failed to get OptionSettings")
-            print("Is your PalWorldSettings.ini formatted correctly?")
-            input("Press RETURN to close")
-            sys.exit(1)
-    return config
+def load(ini_data: str) -> Dict:
+    """Load .ini to JSON"""
+    config = None
+    for line in ini_data.splitlines():
+        if "OptionSettings" in line:
+            config = line
+    if config is None:
+        raise ValueError("Failed to get OptionSettings")
+    return {"Difficulty": "None", **gen_json(parse_config(config))}
 
 
-def create_json(path: str) -> Dict:
-    raw_config = load_palworldsettings(path)
-    parsed_config = parse_config(raw_config)
-    return {"Difficulty": "None", **generate_json_properties(parsed_config)}
-
-
-def create_ini(data: Dict) -> str:
-    ini = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=("
-    for key, value in data.items():
+def dump(json_data: Dict):
+    """Dump JSON to .ini and .sav"""
+    ini_header = "[/Script/Pal.PalGameWorldSettings]\n"
+    ini_config = "OptionSettings=("
+    for key, value in json_data.items():
         if isinstance(value, str):
             if key == "Difficulty":
                 if str(value) == "0":
@@ -288,18 +282,46 @@ def create_ini(data: Dict) -> str:
             value = f"{value:.6f}"
         elif isinstance(value, bool):
             value = str(value).lower()
-        ini += f"{key}={value},"
-    ini = ini.strip(",") + ")"
-    return ini
-
-
-def create_palworldsettings(path: str) -> Dict:
-    raw_config = load_palworldsettings(path)
-    parsed_config = parse_config(raw_config)
-    worldoption["root"]["properties"]["OptionWorldData"]["Struct"]["value"]["Struct"][
+        ini_config += f"{key}={value},"
+    ini_config = ini_config.strip(",") + ")"
+    ini = ini_header + ini_config
+    ini = ini.encode("utf-8")
+    sav_json = worldoption.copy()
+    sav_json["root"]["properties"]["OptionWorldData"]["Struct"]["value"]["Struct"][
         "Settings"
-    ]["Struct"]["value"]["Struct"] = generate_json_config(parsed_config)
-    return worldoption
+    ]["Struct"]["value"]["Struct"] = gen_json(parse_config(ini_config), is_sav=True)
+    uesave_run = subprocess.run(
+        [
+            UESAVE_PATH,
+            "from-json",
+            "--input",
+            "-",
+            "--output",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+        input=json.dumps(sav_json).encode("utf-8"),
+    )
+
+    if uesave_run.returncode != 0:
+        raise RuntimeError(f"uesave failed to convert (return {uesave_run.returncode})")
+
+    save_type = 0x31
+    uedata = uesave_run.stdout
+    uncompressed_len = len(uedata)
+    compressed_data = zlib.compress(uedata)
+    compressed_len = len(compressed_data)
+
+    option = (
+        uncompressed_len.to_bytes(4, byteorder="little")
+        + compressed_len.to_bytes(4, byteorder="little")
+        + b"PlZ"
+        + bytes([save_type])
+        + compressed_data
+    )
+
+    return ini, option
 
 
 worldoption = {
