@@ -242,6 +242,9 @@ def gen_json(config: str, is_sav: bool = False, exclude_keys: list = []) -> Dict
                     continue
                 if not config_properties.is_default(value):
                     conf[key] = config_properties.json_struct(value)
+                if key == "ServerDescription":
+                    value = value.replace("\\n", "\n")
+                    conf[key] = {"Str": {"value": value}}
             else:
                 conf[key] = config_properties.typecast(value)
         except AttributeError:
@@ -294,9 +297,7 @@ def dump(json_data: Dict):
     sav_json = worldoption.copy()
     sav_json["root"]["properties"]["OptionWorldData"]["Struct"]["value"]["Struct"][
         "Settings"
-    ]["Struct"]["value"]["Struct"] = gen_json(
-        parse_config(ini_config), is_sav=True, exclude_keys=["ServerDescription"]
-    )
+    ]["Struct"]["value"]["Struct"] = gen_json(parse_config(ini_config), is_sav=True)
     uesave_run = subprocess.run(
         [
             UESAVE_PATH,
