@@ -218,13 +218,14 @@ class SettingStructs:
     BanListURL = ConfigOption(
         "BanListURL", StructTypes.Str, "https://api.palworldgame.com/api/banlist.txt"
     )
+    bShowPlayerList = ConfigOption("bShowPlayerList", StructTypes.Bool, False)
 
     @staticmethod
     def get_config_option(option_name: str) -> ConfigOption:
         return getattr(SettingStructs, option_name)
 
 
-def gen_json(config: str, is_sav: bool = False) -> Dict:
+def gen_json(config: str, is_sav: bool = False, exclude_keys: list = []) -> Dict:
     conf = {}
     tokens = re.findall(r'(\w.*?)=([^"].*?|".*?")((?=,)|$)', config)
     for key, value, _ in tokens:
@@ -237,6 +238,8 @@ def gen_json(config: str, is_sav: bool = False) -> Dict:
                 value = value.replace('\\"', '"')
             config_properties = SettingStructs.get_config_option(key)
             if is_sav:
+                if key in exclude_keys:
+                    continue
                 if not config_properties.is_default(value):
                     conf[key] = config_properties.json_struct(value)
             else:
@@ -276,6 +279,8 @@ def dump(json_data: Dict):
                     value = "None"
                 else:
                     value = str(value)
+            elif key == "DeathPenalty":
+                value = str(value)
             else:
                 value = f'"{value}"'
         elif isinstance(value, float):
@@ -289,7 +294,9 @@ def dump(json_data: Dict):
     sav_json = worldoption.copy()
     sav_json["root"]["properties"]["OptionWorldData"]["Struct"]["value"]["Struct"][
         "Settings"
-    ]["Struct"]["value"]["Struct"] = gen_json(parse_config(ini_config), is_sav=True)
+    ]["Struct"]["value"]["Struct"] = gen_json(
+        parse_config(ini_config), is_sav=True, exclude_keys=["ServerDescription"]
+    )
     uesave_run = subprocess.run(
         [
             UESAVE_PATH,

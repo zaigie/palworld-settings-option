@@ -48,6 +48,7 @@
     "bIsStartLocationSelectByMap": true,
     "bExistPlayerAfterLogout": false,
     "bEnableDefenseOtherGuildPlayer": false,
+    "bShowPlayerList": false,
     "CoopPlayerMaxNum": 4,
     "ServerPlayerMaxNum": 32,
     "ServerName": "Default Palworld Server",
